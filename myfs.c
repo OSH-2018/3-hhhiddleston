@@ -81,7 +81,6 @@ static int my_mknod(const char* path, mode_t mode, dev_t dev){
   time(&st.mtime);
   // create filenode
   ull idx = ((super_block*)mem[0])->file_first_clean;
-  ////printf("%lld\n", idx);
 
   // no free filenode
   if(idx>=FIRST_DATABLOCK_IDX)
@@ -134,7 +133,6 @@ static void* my_init(struct fuse_conn_info *conn){
 static int my_getattr(const char* path, struct stat * stbuf){
   ////printf("GETATTR-%s\n----------\n",path);
   ull idx = get_filenode(path);
-  ////printf("%lld\n", idx);
   if(strcmp(path, "/") == 0) {
     memset(stbuf, 0, sizeof(struct stat));
     stbuf->st_mode = S_IFDIR | 0755;
@@ -192,8 +190,6 @@ off_t offset, struct fuse_file_info *fi){
   //printf("IDX %lld ; OFFSET %ld ; SIZE %ld\n", idx, offset, size);
 
   size_t add_size = 0;
-  //printf("FILESIZE %ld\n", ((filenode*)mem[idx])->st.st_size);
-  //printf("CONTENT_SIZE %ld\n", CONTENT_SIZE);
   int fuck = 1;
   if(((filenode*)mem[idx])->st.st_size % CONTENT_SIZE  == 0){
     fuck = 0;
@@ -261,7 +257,6 @@ off_t offset, struct fuse_file_info *fi){
           tmp++;
           if(dirty[tmp]==0){
             ((super_block*)mem[0])->data_first_clean = tmp;
-            //printf("FUCK\n");
             break;
           }
         }
@@ -293,7 +288,6 @@ off_t offset, struct fuse_file_info *fi){
       dirty[tmp] = 1;
       // update used block num
       ((super_block*)mem[0])->used_block ++;
-      ////printf("FUCK\n");
       // update first clean datablock idx
       while(tmp<BLOCK_NUM){
         tmp++;
