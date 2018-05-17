@@ -59,7 +59,7 @@ typedef struct {
 
 ```c
 typedef struct {
-  char dirty[BLOCK_SIZE/8];
+  char dirty[BLOCK_SIZE];
 }dirty_block;
 ```
 
