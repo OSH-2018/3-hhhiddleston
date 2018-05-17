@@ -15,13 +15,13 @@
 #define FILENODE_NUM 1024
 #define FIRST_FILENODE_IDX (SUPER_BLOCK_NUM+DIRTY_BLOCK_NUM)
 #define FIRST_DATABLOCK_IDX (SUPER_BLOCK_NUM+DIRTY_BLOCK_NUM+FILENODE_NUM)
-#define CONTENT_SIZE (BLOCK_SIZE-sizeof(int)-sizeof(ull))
+#define CONTENT_SIZE (BLOCK_SIZE-sizeof(ull))
 #define NAMELENGTH 255
 
 #define min(a,b) ({__typeof__(a) _a=(a); __typeof__(b) _b=(b); _a<_b?_a:_b;})
 
 void* mem[BLOCK_NUM];
-char dirty[BLOCK_NUM];
+//char dirty[BLOCK_NUM];
 
 typedef unsigned long long ull;
 
@@ -38,7 +38,7 @@ typedef struct {
 }data_block;
 
 typedef struct {
-  char dirty[BLOCK_SIZE/8];
+  char dirty_in[BLOCK_SIZE];
 }dirty_block;
 
 typedef struct {
@@ -62,7 +62,7 @@ static ull get_filenode(const char* path){
   // else: return 0
   ull i;
   for(i=FIRST_FILENODE_IDX;i<FIRST_DATABLOCK_IDX;i++){
-    if(dirty[i]==1)
+    if((((dirty_block*)mem[1+i/DIRTY_BLOCK_NUM])->dirty_in[i%(BLOCK_SIZE)])==1)
       if(strcmp(((filenode*)mem[i])->filename, path+1) == 0)
         return i;
   }
@@ -81,10 +81,11 @@ static int my_mknod(const char* path, mode_t mode, dev_t dev){
   time(&st.mtime);
   // create filenode
   ull idx = ((super_block*)mem[0])->file_first_clean;
+  ////printf("%lld\n", idx);
 
   // no free filenode
   if(idx>=FIRST_DATABLOCK_IDX)
-    return -errno;
+    return -ENOSPC;
   // create block
   mem[idx] = (filenode*)mmap(NULL,BLOCK_SIZE,PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   ////printf("FILENODE-CREATE-DONE\n");
@@ -95,12 +96,12 @@ static int my_mknod(const char* path, mode_t mode, dev_t dev){
   ull first_block = 0;
   memcpy(&(((filenode*)mem[idx])->first_block), &first_block, sizeof(ull));
   // dirty the filenode_block
-  dirty[idx] = 1;
+  (((dirty_block*)mem[1+idx/DIRTY_BLOCK_NUM])->dirty_in[idx%(BLOCK_SIZE)]) = 1;
   // modify supernode
   // update first clean filenode block
   ull tmp;
   for(tmp=FIRST_FILENODE_IDX;tmp<FIRST_DATABLOCK_IDX;tmp++){
-    if(dirty[tmp]==0){
+    if((((dirty_block*)mem[1+tmp/DIRTY_BLOCK_NUM])->dirty_in[tmp%(BLOCK_SIZE)])==0){
       ((super_block*)((super_block*)mem[0]))->file_first_clean = tmp;
       break;
     }
@@ -123,9 +124,10 @@ static void* my_init(struct fuse_conn_info *conn){
   ull i;
   for(i=1;i<FIRST_FILENODE_IDX;i++){
     mem[i] = (dirty_block*)mmap(NULL,BLOCK_SIZE,PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    memset(mem[i], 0, BLOCK_SIZE);
   }
   // init
-  memset(dirty,0,BLOCK_NUM);
+  //memset(dirty,0,BLOCK_NUM);
   ////printf("INIT-DONE.\n");
   return NULL;
 }
@@ -133,6 +135,7 @@ static void* my_init(struct fuse_conn_info *conn){
 static int my_getattr(const char* path, struct stat * stbuf){
   ////printf("GETATTR-%s\n----------\n",path);
   ull idx = get_filenode(path);
+  ////printf("%lld\n", idx);
   if(strcmp(path, "/") == 0) {
     memset(stbuf, 0, sizeof(struct stat));
     stbuf->st_mode = S_IFDIR | 0755;
@@ -162,7 +165,7 @@ off_t offset, struct fuse_file_info *fi){
   filler(buf, "..", NULL, 0);
   ull idx = FIRST_FILENODE_IDX;
   for(;idx<FIRST_DATABLOCK_IDX;idx++){
-    if(dirty[idx]==1){
+    if((((dirty_block*)mem[1+idx/DIRTY_BLOCK_NUM])->dirty_in[idx%(BLOCK_SIZE)])==1){
       struct stat tmp;
       tmp.st_mode = S_IFREG | 0644;
       tmp.st_uid = ((filenode*)mem[idx])->st.st_uid;
@@ -190,6 +193,8 @@ off_t offset, struct fuse_file_info *fi){
   //printf("IDX %lld ; OFFSET %ld ; SIZE %ld\n", idx, offset, size);
 
   size_t add_size = 0;
+  //printf("FILESIZE %ld\n", ((filenode*)mem[idx])->st.st_size);
+  //printf("CONTENT_SIZE %ld\n", CONTENT_SIZE);
   int fuck = 1;
   if(((filenode*)mem[idx])->st.st_size % CONTENT_SIZE  == 0){
     fuck = 0;
@@ -248,15 +253,16 @@ off_t offset, struct fuse_file_info *fi){
         memset(((data_block*)mem[tmp])->content, 0, CONTENT_SIZE);
         //printf("TARGET-CLEAR!\n");
 
-        dirty[tmp] = 1;
+        (((dirty_block*)mem[1+tmp/DIRTY_BLOCK_NUM])->dirty_in[tmp%(BLOCK_SIZE)]) = 1;
         // update used block num
         ((super_block*)mem[0])->used_block ++;
 
         // update first clean datablock idx
         while(tmp<BLOCK_NUM){
           tmp++;
-          if(dirty[tmp]==0){
+          if((((dirty_block*)mem[1+tmp/DIRTY_BLOCK_NUM])->dirty_in[tmp%(BLOCK_SIZE)])==0){
             ((super_block*)mem[0])->data_first_clean = tmp;
+            //printf("FUCK\n");
             break;
           }
         }
@@ -285,13 +291,14 @@ off_t offset, struct fuse_file_info *fi){
       // clear content
       memset(((data_block*)mem[tmp])->content, 0, CONTENT_SIZE);
       end_block_idx = tmp;
-      dirty[tmp] = 1;
+      (((dirty_block*)mem[1+tmp/DIRTY_BLOCK_NUM])->dirty_in[tmp%(BLOCK_SIZE)]) = 1;
       // update used block num
       ((super_block*)mem[0])->used_block ++;
+      ////printf("FUCK\n");
       // update first clean datablock idx
       while(tmp<BLOCK_NUM){
         tmp++;
-        if(dirty[tmp]==0){
+        if((((dirty_block*)mem[1+tmp/DIRTY_BLOCK_NUM])->dirty_in[tmp%(BLOCK_SIZE)])==0){
           ((super_block*)mem[0])->data_first_clean = tmp;
           break;
         }
@@ -339,7 +346,7 @@ static int my_truncate(const char *path, off_t size){
     while(1){
       next_idx = ((data_block*)mem[cur_idx])->nextnum;
       munmap(mem[cur_idx], BLOCK_SIZE);
-      dirty[cur_idx]=0;
+      (((dirty_block*)mem[1+cur_idx/DIRTY_BLOCK_NUM])->dirty_in[cur_idx%(BLOCK_SIZE)])=0;
       ((super_block*)mem[0])->used_block --;
       if(cur_idx<((super_block*)mem[0])->data_first_clean)
         ((super_block*)mem[0])->data_first_clean = cur_idx;
@@ -373,7 +380,7 @@ static int my_truncate(const char *path, off_t size){
     ull next_block = ((data_block*)mem[cur_block])->nextnum;
     munmap(mem[cur_block], BLOCK_SIZE);
     // clean dirty flag
-    dirty[cur_block]=0;
+    (((dirty_block*)mem[1+cur_block/DIRTY_BLOCK_NUM])->dirty_in[cur_block%(BLOCK_SIZE)])=0;
     // update supernode
     ((super_block*)mem[0])->used_block --;
     if(cur_block<((super_block*)mem[0])->data_first_clean)
@@ -427,7 +434,7 @@ static int my_unlink(const char* path){
   // remove filenode block
   munmap(mem[idx], BLOCK_SIZE);
   // dirty flag
-  dirty[idx] = 0;
+  (((dirty_block*)mem[1+idx/DIRTY_BLOCK_NUM])->dirty_in[idx%(BLOCK_SIZE)]) = 0;
   // supernode
   // update first clean filenode block
   if(idx < ((super_block*)mem[0])->file_first_clean)
@@ -450,3 +457,4 @@ static struct fuse_operations myop={
 int main(int argc, char *argv[]){
   return fuse_main(argc, argv, &myop, NULL);
 }
+
